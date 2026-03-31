@@ -1,0 +1,17 @@
+
+# Python
+__pycache__/
+*.pyc
+logs/
+
+# Local secrets / personal data
+config.yaml
+work_log.txt
+
+# Selenium cached binaries / profiles
+chrome/
+chromedriver/
+chrome_profile/
+
+# Optional Node artifacts (if any)
+node_modules/
