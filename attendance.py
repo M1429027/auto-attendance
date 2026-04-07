@@ -77,7 +77,9 @@ def init_browser(headless: bool = False) -> webdriver.Chrome:
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
 
+    logger.info(f"[BROWSER] launching Chrome headless={headless}")
     driver = webdriver.Chrome(options=options)
+    logger.info("[BROWSER] Chrome launched")
     driver.execute_script(
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     )

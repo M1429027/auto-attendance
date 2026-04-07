@@ -12,10 +12,12 @@ CGU 自動點名系統 - 主程式入口
      請假日立即執行請假流程。
 """
 
+import atexit
 import csv
 import io
 import os
 import shlex
+import signal
 import subprocess
 import sys
 import time as _time
@@ -55,8 +57,44 @@ logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPT_PATH = os.path.join(SCRIPT_DIR, "main.py")
-RUN_JOB_BAT = os.path.join(SCRIPT_DIR, "run_job.bat")
 TEMP_TASK_PREFIX = "CGU_AA_TMP_"
+PYTHON_EXE = sys.executable
+RUN_JOB_PS1 = os.path.join(SCRIPT_DIR, "run_job.ps1")
+
+
+def _ps_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _log_process_start():
+    logger.info(f"[PROC] start pid={os.getpid()} cwd={os.getcwd()} argv={sys.argv}")
+
+
+def _log_process_exit():
+    logger.info(f"[PROC] exit pid={os.getpid()}")
+
+
+def _install_signal_logging():
+    def _handler(signum, _frame):
+        logger.error(f"[PROC] received signal={signum}, process will exit")
+        raise SystemExit(128 + signum)
+
+    for signum in (
+        getattr(signal, "SIGINT", None),
+        getattr(signal, "SIGTERM", None),
+        getattr(signal, "SIGBREAK", None),
+    ):
+        if signum is None:
+            continue
+        try:
+            signal.signal(signum, _handler)
+        except (ValueError, OSError):
+            pass
+
+
+atexit.register(_log_process_exit)
+_install_signal_logging()
+_log_process_start()
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -90,6 +128,7 @@ def _wait_until(not_before: Optional[datetime], label: str):
         now = datetime.now(tz) if tz else datetime.now()
         remain = (not_before - now).total_seconds()
         if remain <= 0:
+            logger.info(f"[GUARD] {label} reached target time")
             return
         _time.sleep(min(0.5, remain))
 
@@ -158,8 +197,11 @@ def cleanup_temp_tasks(task_date: Optional[str] = None):
 
 
 def _build_task_command(args: list[str]) -> str:
-    arg_text = subprocess.list2cmdline(args)
-    return f'cmd /c "cd /d ""{SCRIPT_DIR}"" && call ""{RUN_JOB_BAT}"" {arg_text}"'
+    quoted = subprocess.list2cmdline(args)
+    return (
+        'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass '
+        f'-WindowStyle Hidden -File "{RUN_JOB_PS1}" {quoted}'
+    )
 
 
 def _create_once_task(task_name: str, args: list[str], run_at: datetime):
@@ -221,6 +263,11 @@ def _get_leave_shift_indexes_for_date(config: dict, date_str: str) -> list[int]:
     return indexes
 
 
+def _get_holiday_dates(config: dict) -> set[str]:
+    holiday_cfg = config.get("holiday", {}) or {}
+    return set(holiday_cfg.get("holiday_dates", []) or [])
+
+
 def _map_leave_indexes_to_suffixes(shifts: list[dict], shift_indexes: list[int]) -> list[str]:
     suffixes: list[str] = []
     for idx in shift_indexes:
@@ -257,8 +304,11 @@ def _run_with_single_retry(label: str, func, retry_sec: int) -> bool:
 def _load_shifts_for_today(config: dict) -> list[dict]:
     driver = None
     try:
+        logger.info("[LOAD-SHIFTS] init browser")
         driver = init_browser(headless=config["browser"]["headless"])
+        logger.info("[LOAD-SHIFTS] navigate to attendance")
         navigate_to_attendance(driver, config["url"], config["browser"]["wait_timeout"])
+        logger.info("[LOAD-SHIFTS] read shifts")
         return read_scheduled_shifts(driver, config["browser"]["wait_timeout"])
     finally:
         if driver:
@@ -272,8 +322,11 @@ def _do_sign_in(row_suffix: str, not_before: Optional[datetime] = None) -> bool:
     driver = None
     try:
         _wait_until(not_before, f"SIGN-IN({row_suffix})")
+        logger.info(f"[SIGN-IN] init browser row={row_suffix}")
         driver = init_browser(headless=config["browser"]["headless"])
+        logger.info(f"[SIGN-IN] navigate row={row_suffix}")
         navigate_to_attendance(driver, config["url"], config["browser"]["wait_timeout"])
+        logger.info(f"[SIGN-IN] click sign-in row={row_suffix}")
         success = sign_in(driver, row_suffix, config["browser"]["wait_timeout"])
         msg = "[OK] 簽到成功" if success else "[FAIL] 簽到失敗"
         logger.info(msg)
@@ -300,16 +353,22 @@ def _do_sign_out(row_suffix: str, is_last_shift: bool, not_before: Optional[date
     logger.info(f"[SIGN-OUT] Row: {row_suffix} | 最後一班: {is_last_shift}")
     driver = None
     try:
+        logger.info(f"[SIGN-OUT] leave preload row={row_suffix}")
         _wait_until(not_before, f"SIGN-OUT({row_suffix})")
+        logger.info(f"[SIGN-OUT] init browser row={row_suffix}")
         driver = init_browser(headless=config["browser"]["headless"])
+        logger.info(f"[SIGN-OUT] navigate row={row_suffix}")
         navigate_to_attendance(driver, config["url"], config["browser"]["wait_timeout"])
+        logger.info(f"[SIGN-OUT] read shifts row={row_suffix}")
         shifts = read_scheduled_shifts(driver, config["browser"]["wait_timeout"])
 
+        logger.info(f"[SIGN-OUT] click sign-out row={row_suffix}")
         success = sign_out(driver, row_suffix, "", shifts, config["browser"]["wait_timeout"])
         msg = "[OK] 簽退成功" if success else "[FAIL] 簽退失敗"
         logger.info(msg)
 
         if is_last_shift and success:
+            logger.info(f"[SIGN-OUT] worklog start row={row_suffix}")
             active_shifts = [shift for shift in shifts if shift["row_suffix"] not in set(leave_suffixes)]
             work_content = get_work_content(config["work_log_path"])
             if active_shifts:
@@ -320,6 +379,7 @@ def _do_sign_out(row_suffix: str, is_last_shift: bool, not_before: Optional[date
                     config["browser"]["wait_timeout"],
                 )
                 msg += "（工作日誌: OK）" if wl_ok else "（工作日誌: FAIL）"
+            logger.info(f"[SIGN-OUT] cleanup temp tasks date={today_str}")
             cleanup_temp_tasks(today_str)
 
         send_line_notify(config["notification"]["line_token"], f"【自動點名】{msg} ({row_suffix})")
@@ -399,6 +459,12 @@ def scan_and_schedule():
     logger.info(f"[SCAN] 掃描今日班次 ({today_str})")
 
     cleanup_temp_tasks()
+    if today_str in _get_holiday_dates(config):
+        logger.info(f"[HOLIDAY] {today_str} is configured as holiday, skip all actions")
+        _append_daily_summary(f"[HOLIDAY] SKIP date={today_str}")
+        logger.info(f"{'=' * 50}")
+        return
+
     shifts = _load_shifts_for_today(config)
     if not shifts:
         logger.warning("今日沒有排班資料，不建立任何臨時任務")
@@ -466,24 +532,32 @@ def _run_signin_worker(row_suffix: str, target_time_iso: str):
     config = load_config()
     retry_sec = int(config.get("schedule", {}).get("task_retry_once_sec", 120))
     target_time = _parse_iso_datetime(target_time_iso)
+    logger.info(
+        f"[WORKER] SIGN-IN start row={row_suffix} target={target_time.isoformat()} retry={retry_sec}s"
+    )
     success = _run_with_single_retry(
         f"SIGN-IN({row_suffix})",
         lambda: _do_sign_in(row_suffix, target_time),
         retry_sec,
     )
     _record_job_result("SIGN-IN", row_suffix, success)
+    logger.info(f"[WORKER] SIGN-IN end row={row_suffix} success={success}")
 
 
 def _run_signout_worker(row_suffix: str, target_time_iso: str, is_last_shift: bool):
     config = load_config()
     retry_sec = int(config.get("schedule", {}).get("task_retry_once_sec", 120))
     target_time = _parse_iso_datetime(target_time_iso)
+    logger.info(
+        f"[WORKER] SIGN-OUT start row={row_suffix} target={target_time.isoformat()} last={is_last_shift} retry={retry_sec}s"
+    )
     success = _run_with_single_retry(
         f"SIGN-OUT({row_suffix})",
         lambda: _do_sign_out(row_suffix, is_last_shift, target_time),
         retry_sec,
     )
     _record_job_result("SIGN-OUT", row_suffix, success, f"last={is_last_shift}")
+    logger.info(f"[WORKER] SIGN-OUT end row={row_suffix} success={success}")
 
 
 if __name__ == "__main__":

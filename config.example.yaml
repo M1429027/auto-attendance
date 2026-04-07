@@ -1,37 +1,26 @@
-# ============================================================
-#  CGU 自動點名系統設定檔範本
-# ============================================================
+﻿url: "https://flow.cgu.edu.tw/BPM/Default.aspx"
 
-# 目標網址
-url: "https://flow.cgu.edu.tw/BPM/Default.aspx"
-
-# Microsoft SSO 帳號密碼
 login:
   username: "your_account@cgu.edu.tw"
   password: "your_password"
 
-# 排程時間
 schedule:
-  scan_time: "07:30"
+  scan_time: "08:30"
   timezone: "Asia/Taipei"
   weekdays_only: true
   late_grace_sec: 120
   auto_exit_after_last_job: true
   task_retry_once_sec: 120
 
-# 瀏覽器設定
 browser:
   headless: false
   wait_timeout: 20
 
-# 工作日誌檔案
 work_log_path: "./work_log.txt"
 
-# 通知設定
 notification:
   line_token: ""
 
-# 請假設定
 leave:
   leave_dates: []
   leave_shift_indexes_by_date:
@@ -39,3 +28,9 @@ leave:
   reason_text: "請假(未出勤)"
   auto_submit: true
   click_retry_once_sec: 30
+
+holiday:
+  holiday_dates: []
+  # example:
+  #   - "2026-04-03"
+  #   - "2026-04-06"
