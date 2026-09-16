@@ -28,6 +28,13 @@ from zoneinfo import ZoneInfo
 import logging
 import yaml
 
+from schedule_config import (
+    expected_shifts_for_date,
+    is_configured_workday,
+    leave_indexes_for_shifts,
+    shifts_match_expected,
+)
+
 from attendance import (
     fill_leave_work_log,
     fill_work_log,
@@ -240,7 +247,14 @@ def _schedule_worker_job(task_name: str, args: list[str], target_time: datetime)
     _create_once_task(task_name, args, lead_run)
 
 
-def _get_leave_shift_indexes_for_date(config: dict, date_str: str) -> list[int]:
+def _get_leave_shift_indexes_for_date(
+    config: dict, date_str: str, shifts: Optional[list[dict]] = None
+) -> list[int]:
+    if shifts is not None:
+        indexes = leave_indexes_for_shifts(config, date_str, shifts)
+        if indexes:
+            return indexes
+
     leave_cfg = config.get("leave", {}) or {}
     leave_dates = set(leave_cfg.get("leave_dates", []) or [])
     if date_str not in leave_dates:
@@ -345,10 +359,6 @@ def _do_sign_out(row_suffix: str, is_last_shift: bool, not_before: Optional[date
     config = load_config()
     tz = ZoneInfo(config["schedule"]["timezone"])
     today_str = _today_str(tz)
-    leave_suffixes = _map_leave_indexes_to_suffixes(
-        _load_shifts_for_today(config),
-        _get_leave_shift_indexes_for_date(config, today_str),
-    )
     logger.info(f"{'=' * 50}")
     logger.info(f"[SIGN-OUT] Row: {row_suffix} | 最後一班: {is_last_shift}")
     driver = None
@@ -361,6 +371,10 @@ def _do_sign_out(row_suffix: str, is_last_shift: bool, not_before: Optional[date
         navigate_to_attendance(driver, config["url"], config["browser"]["wait_timeout"])
         logger.info(f"[SIGN-OUT] read shifts row={row_suffix}")
         shifts = read_scheduled_shifts(driver, config["browser"]["wait_timeout"])
+        leave_suffixes = _map_leave_indexes_to_suffixes(
+            shifts,
+            _get_leave_shift_indexes_for_date(config, today_str, shifts),
+        )
 
         logger.info(f"[SIGN-OUT] click sign-out row={row_suffix}")
         success = sign_out(driver, row_suffix, "", shifts, config["browser"]["wait_timeout"])
@@ -395,11 +409,6 @@ def _do_sign_out(row_suffix: str, is_last_shift: bool, not_before: Optional[date
 
 def _run_leave_flow(date_str: str) -> bool:
     config = load_config()
-    shift_indexes = _get_leave_shift_indexes_for_date(config, date_str)
-    if not shift_indexes:
-        logger.info(f"[LEAVE] {date_str} 無有效請假班次設定")
-        return False
-
     driver = None
     retry_sec = int(config.get("leave", {}).get("click_retry_once_sec", 30))
     reason_text = config.get("leave", {}).get("reason_text", "請假(未出勤)")
@@ -409,6 +418,10 @@ def _run_leave_flow(date_str: str) -> bool:
         driver = init_browser(headless=config["browser"]["headless"])
         navigate_to_attendance(driver, config["url"], config["browser"]["wait_timeout"])
         shifts = read_scheduled_shifts(driver, config["browser"]["wait_timeout"])
+        shift_indexes = _get_leave_shift_indexes_for_date(config, date_str, shifts)
+        if not shift_indexes:
+            logger.info(f"[LEAVE] {date_str} 無有效請假時段設定")
+            return False
         leave_suffixes = _map_leave_indexes_to_suffixes(shifts, shift_indexes)
         if not leave_suffixes:
             logger.warning(f"[LEAVE] {date_str} 沒有對應到任何班次")
@@ -459,10 +472,20 @@ def scan_and_schedule():
     logger.info(f"[SCAN] 掃描今日班次 ({today_str})")
 
     cleanup_temp_tasks()
+    if not bool(config.get("automation", {}).get("enabled", False)):
+        logger.info("[SCAN] UI 總開關目前停用，不執行任何動作")
+        _append_daily_summary("[SCAN] SKIP automation disabled")
+        return
+
     if today_str in _get_holiday_dates(config):
         logger.info(f"[HOLIDAY] {today_str} is configured as holiday, skip all actions")
         _append_daily_summary(f"[HOLIDAY] SKIP date={today_str}")
         logger.info(f"{'=' * 50}")
+        return
+
+    if not is_configured_workday(config, today.date()):
+        logger.info("[SCAN] 今天不在 UI 設定的每週上班日，不執行任何動作")
+        _append_daily_summary("[SCAN] SKIP not configured workday")
         return
 
     shifts = _load_shifts_for_today(config)
@@ -471,7 +494,20 @@ def scan_and_schedule():
         _append_daily_summary("[SCAN] no shifts")
         return
 
-    leave_indexes = _get_leave_shift_indexes_for_date(config, today_str)
+    expected_shifts = expected_shifts_for_date(config, today.date())
+    if not shifts_match_expected(expected_shifts, shifts):
+        expected_times = [(item.get("start"), item.get("end")) for item in expected_shifts]
+        actual_times = [(item.get("start"), item.get("end")) for item in shifts]
+        logger.error(
+            f"[SCAN] 網站班表與 UI 設定不一致，停止建立任務。"
+            f" UI={expected_times}, website={actual_times}"
+        )
+        _append_daily_summary(
+            f"[SCAN] FAIL schedule mismatch ui={expected_times} website={actual_times}"
+        )
+        return
+
+    leave_indexes = _get_leave_shift_indexes_for_date(config, today_str, shifts)
     leave_suffixes = set(_map_leave_indexes_to_suffixes(shifts, leave_indexes))
     if leave_suffixes:
         logger.info(f"[LEAVE] 今日請假班次: {sorted(leave_suffixes)}")

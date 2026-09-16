@@ -188,3 +188,64 @@ schtasks /Query /FO LIST /V | findstr CGU_AA_TMP_
 - Temporary worker tasks now run through hidden PowerShell instead of a visible console window, which reduces the chance of accidental task interruption.
 - The program now writes more detailed logs around process start, process exit, waiting, browser launch, navigation, sign-in/sign-out clicks, and work-log entry.
 - If a worker still fails, check the task's `Last Result` and compare it with the final lines in `logs/attendance_YYYYMMDD.log`.
+
+## 圖形控制台（新版建議操作方式）
+
+### 開啟方式
+
+直接雙擊：
+
+```text
+open_ui.bat
+```
+
+也可以執行：
+
+```powershell
+python attendance_ui.py
+```
+
+### 每學期設定流程
+
+1. 開啟「每週班表」頁籤。
+2. 勾選本學期有上班的星期。
+3. 填入每一天的第 1 班、第 2 班開始與結束時間；沒有第二班就留空。
+4. 設定每日掃描時間，建議比最早班次早 30 分鐘，例如 `08:30`。
+5. 勾選「啟用自動點名」。
+6. 按「儲存、測試並套用」。
+7. UI 會先檢查時間格式、時間重疊、請假時段，再建立並查詢 Windows 主排程。
+
+### 指定某日某時段請假
+
+1. 先完成每週班表。
+2. 開啟「指定請假」頁籤。
+3. 輸入日期，例如 `2026-09-21`。
+4. 從下拉選單選擇當天要請假的班次。
+5. 按「加入請假」。
+6. 按「儲存、測試並套用」。
+
+請假改用「日期 + 實際時段」儲存，不再需要判斷 `ctl02` 或第幾班。
+
+### 暫停與恢復
+
+- 暫停：取消勾選「啟用自動點名」，再按「儲存、測試並套用」。
+- 恢復：勾選「啟用自動點名」，確認班表後再儲存。
+
+停用後有雙重保護：Windows 主排程會被停用，即使手動執行 `main.py --scan`，程式也會因總開關關閉而立即退出。
+
+### 班表安全檢查
+
+每日掃描網站後，程式會比較：
+
+- UI 設定的當日班次
+- 網站實際讀到的班次
+
+只要班數、開始時間或結束時間不一致，就不建立任何簽到／簽退任務，並在 log 記錄差異，避免換學期後誤用舊班表。
+
+### 在 UI 編輯工作內容
+
+1. 開啟「工作內容」頁籤。
+2. 輸入最後一班簽退後要送出的工作摘要。
+3. 按「儲存工作內容」，或按主畫面的「儲存、測試並套用」。
+
+內容會儲存在 `work_log.txt`。若沒有修改，就會每天持續使用相同內容；修改並儲存後，下一次工作日誌會使用新內容。一般工作日仍會在最後一班簽退成功後自動填入並傳送；請假日不會使用這段工作摘要。

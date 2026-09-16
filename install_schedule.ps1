@@ -1,6 +1,6 @@
 param(
     [string]$TaskName = "CGU_AutoAttendance_Scan",
-    [string]$StartTime = "07:20",
+    [string]$StartTime = "08:30",
     [string]$Days = "MON,TUE,FRI"
 )
 

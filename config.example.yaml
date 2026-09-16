@@ -1,4 +1,4 @@
-﻿url: "https://flow.cgu.edu.tw/BPM/Default.aspx"
+url: "https://flow.cgu.edu.tw/BPM/Default.aspx"
 
 login:
   username: "your_account@cgu.edu.tw"
@@ -22,6 +22,11 @@ notification:
   line_token: ""
 
 leave:
+  # UI 使用日期 + 時段記錄請假。
+  requests:
+    - date: "2026-09-21"
+      start: "09:00"
+      end: "12:30"
   leave_dates: []
   leave_shift_indexes_by_date:
     # "2026-03-31": [1, 2]
@@ -34,3 +39,22 @@ holiday:
   # example:
   #   - "2026-04-03"
   #   - "2026-04-06"
+
+
+automation:
+  enabled: false
+  task_name: CGU_AutoAttendance_Scan
+
+# UI 每週班表；沒有上班的星期保留空陣列。
+weekly_schedule:
+  monday:
+    - start: "09:00"
+      end: "12:30"
+  tuesday:
+    - start: "13:00"
+      end: "17:00"
+  wednesday: []
+  thursday: []
+  friday: []
+  saturday: []
+  sunday: []

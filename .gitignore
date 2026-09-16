@@ -6,6 +6,7 @@ logs/
 
 # Local secrets / personal data
 config.yaml
+config.yaml.bak
 work_log.txt
 
 # Selenium cached binaries / profiles
